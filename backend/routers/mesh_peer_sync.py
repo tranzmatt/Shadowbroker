@@ -85,6 +85,64 @@ async def infonet_peer_push(request: Request):
     return {"ok": True, **result}
 
 
+@router.post("/api/mesh/dm/replicate-envelope")
+@limiter.limit("60/minute")
+async def dm_replicate_envelope(request: Request):
+    """Accept a DM envelope replicated from a peer relay (cross-node mailbox).
+
+    Companion endpoint to ``DMRelay.replicate_to_peers`` (outbound, in
+    ``mesh_dm_relay.py``). The sender's relay POSTs an encrypted DM
+    envelope here after a successful local ``deposit``; this endpoint
+    re-enforces the per-(sender, recipient) anti-spam cap and stores
+    the envelope in the local mailbox if accepted.
+
+    The cap is the network rule: a hostile sender's relay can spool
+    extras locally, but every honest peer enforces the cap on inbound
+    replication. Recipient polling from any honest peer therefore
+    never sees more than ``MESH_DM_PENDING_PER_SENDER_LIMIT`` pending
+    from any one sender, no matter how many spam attempts were tried.
+
+    Same HMAC auth pattern as ``infonet_peer_push`` and ``gate_peer_push``.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            # DM envelopes are bounded by MESH_DM_MAX_MSG_BYTES + envelope
+            # overhead; 64 KB is a generous ceiling.
+            if int(content_length) > 65_536:
+                return Response(
+                    content='{"ok":false,"detail":"Request body too large (max 64KB)"}',
+                    status_code=413, media_type="application/json",
+                )
+        except (ValueError, TypeError):
+            pass
+    body_bytes = await request.body()
+    if not _verify_peer_push_hmac(request, body_bytes):
+        return Response(
+            content='{"ok":false,"detail":"Invalid or missing peer HMAC"}',
+            status_code=403, media_type="application/json",
+        )
+    try:
+        body = json_mod.loads(body_bytes or b"{}")
+    except (ValueError, TypeError):
+        return Response(
+            content='{"ok":false,"detail":"Invalid JSON body"}',
+            status_code=400, media_type="application/json",
+        )
+    envelope = body.get("envelope")
+    if not isinstance(envelope, dict):
+        return {"ok": False, "detail": "envelope must be an object"}
+
+    originating_peer = _peer_hmac_url_from_request(request) or ""
+
+    from services.mesh.mesh_dm_relay import dm_relay
+    result = dm_relay.accept_replica(
+        envelope=envelope,
+        originating_peer_url=originating_peer,
+    )
+    return result
+
+
 @router.post("/api/mesh/gate/peer-push")
 @limiter.limit("30/minute")
 async def gate_peer_push(request: Request):

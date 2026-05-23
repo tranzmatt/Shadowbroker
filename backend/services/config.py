@@ -116,6 +116,21 @@ class Settings(BaseSettings):
     MESH_DM_REQUEST_MAILBOX_LIMIT: int = 12
     MESH_DM_SHARED_MAILBOX_LIMIT: int = 48
     MESH_DM_SELF_MAILBOX_LIMIT: int = 12
+    # Anti-spam: cap on distinct UNACKED messages a single sender can have
+    # parked in a single recipient's mailbox at any one time. Once the
+    # recipient pulls (acks) a message, the sender's quota for that pair
+    # frees up. Default 2 — a sender who wants to deliver more must wait
+    # for the recipient to actually read the prior messages.
+    #
+    # This cap is enforced TWICE: once on the local deposit path (the
+    # sender's own node refuses to spool the 3rd message) AND once on
+    # the replication-acceptance path (honest peer relays refuse to
+    # accept inbound replicas that would put them over the cap). The
+    # double enforcement makes the rule a NETWORK rule — patching out
+    # the local check on a hostile sender's relay doesn't let extras
+    # propagate, because every honest peer enforces the same cap on
+    # inbound replication.
+    MESH_DM_PENDING_PER_SENDER_LIMIT: int = 2
     MESH_BLOCK_LEGACY_AGENT_ID_LOOKUP: bool = True
     MESH_ALLOW_COMPAT_DM_INVITE_IMPORT: bool = False
     MESH_ALLOW_COMPAT_DM_INVITE_IMPORT_UNTIL: str = ""
